@@ -28,7 +28,7 @@ let secondsRecord = 0;
 
 const translations = {
     tr: {
-        welcome: "BitChat P2P",
+        welcome: "BitCep P2P",
         instruction: "BitChat'e hoş geldiniz. Başlamak için bir rumuz girin.",
         login_btn: "Bağlan",
         placeholder: "Mesaj...",
@@ -44,7 +44,7 @@ const translations = {
         download: "İndir"
     },
     ar: {
-        welcome: "بيت شات P2P",
+        welcome: "بيت جيب P2P",
         instruction: "مرحباً بك في بيت شات. أدخل اسم مستعار للبدء.",
         login_btn: "اتصال",
         placeholder: "رسالة...",
@@ -60,7 +60,7 @@ const translations = {
         download: "تحميل"
     },
     en: {
-        welcome: "BitChat P2P",
+        welcome: "BitCep P2P",
         instruction: "Welcome to BitChat. Enter a nickname to start.",
         login_btn: "Connect",
         placeholder: "Message...",
@@ -80,20 +80,51 @@ const translations = {
 window.changeLanguage = (lang) => {
     CURRENT_LANG = lang;
     const btns = document.querySelectorAll('.lang-btn');
-    btns[0].classList.toggle('active', lang === 'tr');
-    btns[1].classList.toggle('active', lang === 'ar');
-    btns[2].classList.toggle('active', lang === 'en');
+    btns.forEach(b => b.classList.remove('active'));
+    if (lang === 'tr') btns[0].classList.add('active');
+    if (lang === 'ar') btns[1].classList.add('active');
+    if (lang === 'en') btns[2].classList.add('active');
 
     const t = translations[lang];
     document.getElementById('lang-welcome').innerText = t.welcome;
+    document.getElementById('app-title').innerText = t.welcome;
     document.getElementById('lang-instruction').innerText = t.instruction;
     document.getElementById('login-btn').innerText = t.login_btn;
     document.getElementById('message-input').placeholder = t.placeholder;
     document.getElementById('lang-encryption-msg').innerText = t.encryption_msg;
-    document.getElementById('bt-scan').innerText = t.bt_label;
+    document.getElementById('bt-scan').innerHTML = `<span>${t.bt_label}</span> <div class="bt-wave"></div>`;
     if (document.getElementById('lang-bt-title')) document.getElementById('lang-bt-title').innerText = t.bt_title;
     if (document.getElementById('close-modal')) document.getElementById('close-modal').innerText = t.bt_close;
 };
+
+// Permission and Bluetooth Intelligence
+async function checkBluetoothStatus() {
+    if (window.Capacitor && window.Capacitor.Plugins.BluetoothLe) {
+        const Ble = window.Capacitor.Plugins.BluetoothLe;
+        try {
+            const status = await Ble.getEnabledState();
+            if (!status.enabled) {
+                alert(CURRENT_LANG === 'tr' ? "⚠️ Bluetooth Kapalı! Lütfen ayarlardan açın." :
+                    (CURRENT_LANG === 'ar' ? "⚠️ البلوتوث مغلق! يرجى تفعيله من الإعدادات." : "⚠️ Bluetooth is OFF! Please enable it."));
+                return false;
+            }
+            return true;
+        } catch (e) { return true; }
+    }
+    return true;
+}
+
+async function requestAppPermissions() {
+    if (window.Capacitor) {
+        try {
+            // This triggers the native system prompts for Mic and Camera
+            await navigator.mediaDevices.getUserMedia({ audio: true });
+            // For Bluetooth, the plugin handles it on first scan usually, but we can be explicit
+        } catch (e) {
+            console.warn("Permissions denied or not available", e);
+        }
+    }
+}
 
 // Handle File Attachments
 attachBtn.addEventListener('click', () => {
@@ -176,14 +207,16 @@ function stopRecording() {
     }
 }
 
-// Bluetooth Real Tracking Logic
+// Bluetooth Tracking Logic
 btScanBtn.addEventListener('click', async () => {
+    const isBtOn = await checkBluetoothStatus();
+    if (!isBtOn) return;
+
     discoveryModal.style.display = 'flex';
     const t = translations[CURRENT_LANG];
     btStatus.innerText = t.bt_searching;
     deviceList.innerHTML = `<div class="device-item">${t.bt_searching}</div>`;
 
-    // Try real Bluetooth via Capacitor if available
     if (window.Capacitor && window.Capacitor.Plugins.BluetoothLe) {
         const Ble = window.Capacitor.Plugins.BluetoothLe;
         try {
@@ -191,20 +224,18 @@ btScanBtn.addEventListener('click', async () => {
             await Ble.requestLEScan();
 
             Ble.addListener('onScanResult', (result) => {
-                const name = result.device.name || "Bilinmeyen Cihaz";
-                const rssi = result.rssi; // Signal strength
+                const name = result.device.name || "P2P Device";
+                const rssi = result.rssi;
                 addDeviceToList(name, rssi);
             });
 
-            // Stop scan after 5 seconds
             setTimeout(async () => {
                 await Ble.stopLEScan();
                 if (deviceList.innerHTML.includes(t.bt_searching)) {
-                    deviceList.innerHTML = `<div style="padding: 20px; opacity: 0.6;">${CURRENT_LANG === 'tr' ? 'Yakınlarda aktif cihaz bulunamadı.' : 'No active devices found nearby.'}</div>`;
+                    deviceList.innerHTML = `<div style="padding: 20px; opacity: 0.6;">${CURRENT_LANG === 'tr' ? 'Yakınlarda aktif cihaz bulunamadı.' : 'لم يتم العثور على أجهزة'}</div>`;
                 }
             }, 5000);
         } catch (e) {
-            console.error("BLE Error:", e);
             simulateBluetoothScan();
         }
     } else {
@@ -243,11 +274,27 @@ closeModalBtn.addEventListener('click', () => {
     discoveryModal.style.display = 'none';
 });
 
-// Login Logic
+// Auto-Login and focus fixes
+document.addEventListener('DOMContentLoaded', () => {
+    requestAppPermissions();
+    const savedName = localStorage.getItem('bitcep_username');
+    if (savedName) {
+        MY_USERNAME = savedName;
+        usernameInput.value = savedName;
+        loginOverlay.style.display = 'none';
+        connect();
+    }
+
+    messageInput.addEventListener('click', () => {
+        if (!messageInput.disabled) messageInput.focus();
+    });
+});
+
 loginBtn.addEventListener('click', () => {
     const name = usernameInput.value.trim();
     if (name) {
         MY_USERNAME = name;
+        localStorage.setItem('bitcep_username', name);
         loginOverlay.style.display = 'none';
         connect();
     } else {
@@ -255,7 +302,7 @@ loginBtn.addEventListener('click', () => {
     }
 });
 
-// WebSocket Connection (Fallback for local testing)
+// WebSocket Connection
 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 const wsUrl = `${protocol}//${window.location.host}`;
 let socket;
@@ -265,6 +312,8 @@ function connect() {
     socket.onopen = () => {
         messageInput.disabled = false;
         sendBtn.disabled = false;
+        const sysMsg = document.querySelector('.system-msg');
+        if (sysMsg) sysMsg.innerText = CURRENT_LANG === 'ar' ? "شبكة P2P مستقرة" : (CURRENT_LANG === 'tr' ? "P2P Ağı Kararlı" : "P2P Network Stable");
     };
     socket.onmessage = (event) => {
         const data = JSON.parse(event.data);
