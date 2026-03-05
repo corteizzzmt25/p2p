@@ -11,24 +11,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: 'npm'
       
       - name: Install dependencies
         run: npm install
         
-      - name: Setup Capacitor
+      - name: Setup Capacitor Android
         run: |
-          npm install @capacitor/cli @capacitor/core @capacitor/android
-          # Eğer klasör varsa sync yap, yoksa ekle ve sync yap
-          if [ -d "android" ]; then
-            npx cap sync android
-          else
-            npx cap add android
-            npx cap sync android
-          fi
+          # Clean build: removes existing android/ folder if any and adds it fresh
+          rm -rf android
+          npx cap add android
+          npx cap sync android
           
       - name: Build APK (Debug)
         run: |
@@ -47,23 +45,21 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+      
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: 'npm'
           
       - name: Install dependencies
         run: npm install
         
-      - name: Setup Capacitor
+      - name: Setup Capacitor iOS
         run: |
-          npm install @capacitor/cli @capacitor/core @capacitor/ios
-          if [ -d "ios" ]; then
-             npx cap sync ios
-          else
-             npx cap add ios
-             npx cap sync ios
-          fi
+          rm -rf ios
+          npx cap add ios
+          npx cap sync ios
           
       - name: Build iOS (Xcode)
         run: |
@@ -72,7 +68,7 @@ jobs:
           
       - name: Zip iOS App
         run: |
-          # Bu kısımda path'i daha güvenli hale getirdim
+          # Robust search for the .app file
           find ios/App/build -name "*.app" -exec zip -r BitChat.app.zip {} +
           mv BitChat.app.zip ios/App/BitChat.app.zip
           
