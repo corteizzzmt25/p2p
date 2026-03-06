@@ -4,42 +4,30 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>SYP2P - BitChat</title>
-    <!-- Premium Fonts -->
+    <title>Surbit 🇸🇾 - Bluetooth P2P</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
 
-    <!-- Ultra Minimalist Login Overlay -->
+    <!-- Giriş Ekranı -->
     <div id="login-overlay">
         <div class="login-card">
-            <div class="lang-selector">
-                <button class="lang-btn active" onclick="changeLanguage('tr')">🇹🇷</button>
-                <button class="lang-btn" onclick="changeLanguage('ar')">🇸🇾</button>
-                <button class="lang-btn" onclick="changeLanguage('en')">🇺🇸</button>
-            </div>
-
-            <h2 id="lang-welcome">BitChat P2P</h2>
-            <p id="lang-instruction" style="margin-bottom: 20px; opacity: 0.8; font-size: 0.9rem;">BitChat'e hoş
-                geldiniz. Başlamak için bir rumuz girin.</p>
-
-            <input type="text" id="username-input" placeholder="Rumuz / Nickname..." maxlength="15">
+            <h2 id="lang-welcome">Surbit 🇸🇾</h2>
+            <p id="lang-instruction">Lütfen bir rumuz girerek başlayın.</p>
+            <input type="text" id="username-input" placeholder="Rumuz..." maxlength="15">
             <button class="login-btn" id="login-btn">Bağlan</button>
-
-            <p id="lang-encryption-msg"
-                style="margin-top: 25px; font-size: 0.7rem; font-weight: 600; opacity: 0.5; text-transform: uppercase; letter-spacing: 1px;">
-                Bluetooth P2P Şifreli Haberleşme 🇸🇾
-            </p>
+            <p class="encryption-msg">Bluetooth P2P Şifreli 🇸🇾</p>
         </div>
     </div>
 
-    <!-- Main App Container -->
+    <!-- Ana Uygulama Konteynırı -->
     <div class="container">
-        <!-- DM List / Home View -->
+
+        <!-- DM Listesi Görünümü -->
         <div id="dm-view" class="view-active">
             <header>
                 <div class="header-main">
@@ -52,13 +40,12 @@
             <div id="dm-list-container">
                 <div class="dm-section-title">Aktif P2P Cihazları</div>
                 <div id="dm-list">
-                    <!-- Discovered devices will appear here like WhatsApp chats -->
-                    <div class="empty-state">Yakındaki cihazları bulmak için taranıyor...</div>
+                    <div class="empty-state">Henüz cihaz bulunamadı.</div>
                 </div>
             </div>
         </div>
 
-        <!-- Chat View (Hidden by default) -->
+        <!-- Chat Görünümü -->
         <div id="chat-view" class="view-hidden">
             <header>
                 <div style="display: flex; align-items: center; gap: 15px;">
@@ -74,7 +61,6 @@
                 <div id="messages"></div>
             </div>
 
-            <!-- Premium WhatsApp-style Input Bar -->
             <div class="chat-footer">
                 <button class="action-btn" id="attach-plus-btn">➕</button>
                 <div class="input-wrapper">
@@ -85,39 +71,24 @@
             </div>
         </div>
 
-        <!-- Voice Recorder Visualizer Popover -->
+        <!-- Ses Kayıt Durumu -->
         <div id="recorder-status" class="recorder-hidden">
             <div class="recorder-bar"></div>
             <span id="recorder-time">00:00</span>
         </div>
 
-        <!-- Hidden Inputs for Media -->
         <input type="file" id="photo-input" accept="image/*" style="display: none;">
     </div>
 
-    <!-- Connection Request Modal -->
+    <!-- Bağlantı İsteği Modalı -->
     <div id="request-modal" class="modal-hidden">
         <div class="modal-content">
-            <div class="request-icon">📡</div>
             <h3 id="request-title">Bağlantı İsteği</h3>
-            <p id="request-msg">Bir cihaz seninle mesajlaşmak istiyor.</p>
+            <p id="request-msg">Bilinmeyen bir cihaz seninle mesajlaşmak istiyor.</p>
             <div class="modal-actions">
                 <button id="refuse-btn" class="modal-btn secondary">Reddet</button>
                 <button id="accept-btn" class="modal-btn primary">Kabul Et</button>
             </div>
-        </div>
-    </div>
-
-    <!-- Bluetooth Discovery Modal -->
-    <div id="discovery-modal">
-        <div class="modal-content">
-            <h3 id="lang-bt-title">Cihaz Bulma</h3>
-            <div id="bt-status" style="font-size: 0.8rem; margin: 10px 0; color: #666;">...</div>
-            <div id="device-list">
-                <!-- Devices will appear here -->
-            </div>
-            <button id="close-modal" class="login-btn"
-                style="background: #666; padding: 10px; margin-top: 15px;">Kapat</button>
         </div>
     </div>
 
