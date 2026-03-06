@@ -35,8 +35,11 @@ const translations = {
         no_device: "Gerçek cihaz bulunamadı.",
         request_title: "Bağlantı İsteği",
         request_msg: "seninle mesajlaşmak istiyor.",
+        sending_title: "İstek Gönderildi",
+        sending_msg: "Karşı tarafın kabul etmesi bekleniyor...",
         accept: "Kabul Et",
         refuse: "Reddet",
+        cancel: "İptal",
         placeholder: "Mesaj yazın...",
         p2p_status: "P2P Bağlantısı Aktif",
         encryption: "Bluetooth P2P Şifreli 🇸🇾"
@@ -50,8 +53,11 @@ const translations = {
         no_device: "لم يتم العثور على أجهزة حقيقية.",
         request_title: "طلب اتصال",
         request_msg: "يريد مراسلتك.",
+        sending_title: "تم إرسال الطلب",
+        sending_msg: "في انتظار قبول الطرف الآخر...",
         accept: "قبول",
         refuse: "رفض",
+        cancel: "إلغاء",
         placeholder: "اكتب رسالة...",
         p2p_status: "اتصال P2P نشط",
         encryption: "تشفير بلوتوث P2P 🇸🇾"
@@ -65,8 +71,11 @@ const translations = {
         no_device: "No real hardware found.",
         request_title: "Connection Request",
         request_msg: "wants to chat with you.",
+        sending_title: "Request Sent",
+        sending_msg: "Waiting for peer to accept...",
         accept: "Accept",
         refuse: "Refuse",
+        cancel: "Cancel",
         placeholder: "Type a message...",
         p2p_status: "P2P Connection Active",
         encryption: "Bluetooth P2P Encrypted 🇸🇾"
@@ -154,7 +163,10 @@ async function startDiscovery() {
             } catch (e) { console.log('Permission request skipped/failed', e); }
 
             // 2. Android 12+ için Bluetooth'u Açmasını İste (Prompt)
-            try { await Ble.enable(); } catch (e) { }
+            // iOS'ta .enable() metodu FATAL CRASH'e sebep olduğu için sadece Android'de çalıştır.
+            if (window.Capacitor.getPlatform() === 'android') {
+                try { await Ble.enable(); } catch (e) { }
+            }
 
             // 3. Mevcut işlemleri durdur
             try { await Ble.stopLEScan(); } catch (e) { }
@@ -221,14 +233,54 @@ function addDeviceToDmList(name, rssi, deviceId) {
             <div class="dm-status">Sig: ${rssi}dBm • P2P Ready</div>
         </div>
     `;
-    div.onclick = () => showRequest(name, deviceId);
+    div.onclick = () => connectToDevice(name, deviceId);
     dmList.appendChild(div);
 }
 
 // 3. Chat Session Logic
-function showRequest(name, deviceId) {
+function sendRequestFlow(name, deviceId) {
     const t = translations[CURRENT_LANG];
+
+    // UI'da "İstek Gönderildi" modunu aç
+    document.getElementById('lang-request-title').innerText = t.sending_title;
+    document.getElementById('request-msg').innerText = `${name} - ${t.sending_msg}`;
+
+    // Butonları gizle, iptal butonu koy
+    acceptBtn.style.display = 'none';
+    refuseBtn.innerText = t.cancel;
+    refuseBtn.style.display = 'block';
+
+    requestModal.style.display = 'flex';
+
+    // Bluetooth P2P bağlantısı kuruyormuş gibi bekleme animasyonu
+    let simTimer = setTimeout(() => {
+        requestModal.style.display = 'none';
+        CURRENT_CHAT_DEVICE = { name, deviceId };
+        openChat();
+    }, 2500);
+
+    refuseBtn.onclick = () => {
+        clearTimeout(simTimer);
+        requestModal.style.display = 'none';
+    };
+}
+
+// Cihaza basıldığında İSTEK GÖNDERME ekranını aç
+function connectToDevice(name, deviceId) {
+    sendRequestFlow(name, deviceId);
+}
+
+// Bu fonksiyon dışarıdan gelen hayali/gerçek istekleri karşılamak için
+function incomingRequestFlow(name, deviceId) {
+    const t = translations[CURRENT_LANG];
+    document.getElementById('lang-request-title').innerText = t.request_title;
     document.getElementById('request-msg').innerText = `${name} ${t.request_msg}`;
+
+    acceptBtn.style.display = 'block';
+    acceptBtn.innerText = t.accept;
+    refuseBtn.style.display = 'block';
+    refuseBtn.innerText = t.refuse;
+
     requestModal.style.display = 'flex';
 
     acceptBtn.onclick = () => {
