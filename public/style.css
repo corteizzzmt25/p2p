@@ -34,7 +34,7 @@ body {
 }
 
 header {
-    padding: 1.2rem 1.5rem;
+    padding: calc(1.2rem + env(safe-area-inset-top, 35px)) 1.5rem 1.2rem 1.5rem;
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -125,12 +125,20 @@ header h1 {
 }
 
 .bt-icon {
-    font-size: 1.2rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     padding: 8px;
     cursor: pointer;
     background: rgba(255, 255, 255, 0.4);
     border: 1px solid rgba(0, 0, 0, 0.05);
     border-radius: 12px;
+}
+
+.bt-svg-icon {
+    width: 24px;
+    height: 24px;
+    stroke: var(--black);
 }
 
 /* Dil Seçici */
@@ -174,7 +182,7 @@ header h1 {
     top: 0;
     left: 0;
     width: 100%;
-    padding: 10px;
+    padding: calc(12px + env(safe-area-inset-top, 35px)) 10px 10px 10px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -223,6 +231,7 @@ header h1 {
 .login-card {
     width: 85%;
     max-width: 380px;
+    margin-top: env(safe-area-inset-top, 40px);
     padding: 2.5rem;
     background: #fff;
     border-radius: 35px;

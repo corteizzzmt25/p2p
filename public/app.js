@@ -24,6 +24,8 @@ let CURRENT_LANG = localStorage.getItem('surbit_lang') || 'tr';
 let CURRENT_CHAT_DEVICE = null;
 let DISCOVERED_DEVICES = [];
 let CHAT_HISTORIES = {};
+let CURRENT_SCAN_STATE = 'idle';
+let LAST_ERROR = '';
 
 const translations = {
     tr: {
@@ -33,6 +35,7 @@ const translations = {
         active_title: "Aktif P2P Cihazları",
         scanning: "Cihazlar taranıyor... 🔍",
         no_device: "Gerçek cihaz bulunamadı.",
+        no_device_desc: "P2P testleri için lütfen her iki cihazda da <b>Ayarlar > Bluetooth</b> menüsünü AÇIK ve EKRANDA tutun. (iPhone'lar ancak bu menü açıkken kendini dışarıya yayınlar). Bluetooth'u kapatıp açarak tekrar deneyin.",
         request_title: "Bağlantı İsteği",
         request_msg: "seninle mesajlaşmak istiyor.",
         sending_title: "İstek Gönderildi",
@@ -51,6 +54,7 @@ const translations = {
         active_title: "أجهزة P2P النشطة",
         scanning: "جاري البحث عن أجهزة... 🔍",
         no_device: "لم يتم العثور على أجهزة حقيقية.",
+        no_device_desc: "لاختبارات P2P، يرجى إبقاء قائمة <b>الإعدادات > البلوتوث</b> مفتوحة على الشاشة على كلا الجهازين. (أجهزة iPhone تبث نفسها للخارج فقط عندما تكون هذه القائمة مفتوحة).",
         request_title: "طلب اتصال",
         request_msg: "يريد مراسلتك.",
         sending_title: "تم إرسال الطلب",
@@ -69,6 +73,7 @@ const translations = {
         active_title: "Active P2P Devices",
         scanning: "Scanning for devices... 🔍",
         no_device: "No real hardware found.",
+        no_device_desc: "For P2P tests, please keep the <b>Settings > Bluetooth</b> menu OPEN and ON SCREEN on both devices. (iPhones only broadcast themselves when this menu is open).",
         request_title: "Connection Request",
         request_msg: "wants to chat with you.",
         sending_title: "Request Sent",
@@ -99,17 +104,40 @@ function applyTranslations() {
     if (get('lang-instruction')) get('lang-instruction').innerText = t.instruction;
     if (get('login-btn')) get('login-btn').innerText = t.login_btn;
     if (get('lang-active-title')) get('lang-active-title').innerText = t.active_title;
-    if (get('lang-scanning')) get('lang-scanning').innerText = t.scanning;
     if (get('lang-request-title')) get('lang-request-title').innerText = t.request_title;
     if (get('accept-btn')) get('accept-btn').innerText = t.accept;
     if (get('refuse-btn')) get('refuse-btn').innerText = t.refuse;
     if (get('message-input')) get('message-input').placeholder = t.placeholder;
     if (get('lang-p2p-status')) get('lang-p2p-status').innerText = t.p2p_status;
     if (get('lang-encryption')) get('lang-encryption').innerText = t.encryption;
+
     // Aktif dil butonunu işaretle
     document.querySelectorAll('.lang-btn').forEach(b => b.classList.remove('active'));
     const activeBtn = document.getElementById(`lang-${CURRENT_LANG}`);
     if (activeBtn) activeBtn.classList.add('active');
+
+    updateEmptyState();
+}
+
+function updateEmptyState() {
+    if (CURRENT_SCAN_STATE === 'idle') return;
+    const t = translations[CURRENT_LANG];
+    if (dmList.querySelector('.dm-item')) dmList.innerHTML = '';
+
+    let el = dmList.querySelector('.empty-state');
+    if (!el) {
+        el = document.createElement('div');
+        el.className = 'empty-state';
+        dmList.appendChild(el);
+    }
+
+    if (CURRENT_SCAN_STATE === 'scanning') {
+        el.innerHTML = t.scanning;
+    } else if (CURRENT_SCAN_STATE === 'no_device') {
+        el.innerHTML = `<b>${t.no_device}</b><br><br><span style="font-size: 0.85rem; line-height: 1.5; display: block; margin-top: 5px;">${t.no_device_desc}</span>`;
+    } else if (CURRENT_SCAN_STATE === 'error') {
+        el.innerHTML = `<b>Bağlantı/İzin Hatası:</b><br><span style="font-size: 0.85rem; opacity: 0.8; margin-top: 5px; display: block;">${LAST_ERROR}</span>`;
+    }
 }
 
 // 1b. Bluetooth Durum Kontrolü
@@ -145,80 +173,65 @@ async function checkBTStatus() {
 // 2. Discovery
 async function startDiscovery() {
     if (!MY_USERNAME) return;
-    const t = translations[CURRENT_LANG];
-    dmList.innerHTML = `<div class="empty-state">${t.scanning}</div>`;
+    CURRENT_SCAN_STATE = 'scanning';
+    updateEmptyState();
     DISCOVERED_DEVICES = [];
 
     if (window.Capacitor && window.Capacitor.Plugins.BluetoothLe) {
         const Ble = window.Capacitor.Plugins.BluetoothLe;
         try {
-            // Android 12+ ve iOS için Zorunlu İzinler
             try {
                 await Ble.initialize();
-            } catch (e) { console.log("BT already initialized"); }
+            } catch (e) { console.log("BT Zaten başlatıldı (Normal)", e); }
 
-            // 1. Önce İzinleri İste (Hem Android Hem iOS için Hayati)
-            try {
-                await Ble.requestPermissions();
-            } catch (e) { console.log('Permission request skipped/failed', e); }
-
-            // 2. Android 12+ için Bluetooth'u Açmasını İste (Prompt)
-            // iOS'ta .enable() metodu FATAL CRASH'e sebep olduğu için sadece Android'de çalıştır.
+            // İOS'TAKİ ÇÖKME SEBEBİ BURASIYDI:
+            // iOS arka planda zaten izinleri initialize'da sorar. requestPermissions'ı üst üste çağırmak sistemi çökertiyor. 
+            // Aynı şekilde Ble.enable() iOS'u doğrudan crash ettirir!
             if (window.Capacitor.getPlatform() === 'android') {
+                try { await Ble.requestPermissions(); } catch (e) { }
                 try { await Ble.enable(); } catch (e) { }
             }
 
-            // 3. Mevcut işlemleri durdur
+            // Mevcut taramaları durdur
             try { await Ble.stopLEScan(); } catch (e) { }
 
-            // Taramayı Başlat (Tüm özellikleri kapsayacak şekilde)
+            // Taramayı Başlat
             await Ble.requestLEScan({
-                allowDuplicates: false,
-                scanMode: 2 // Low Latency (Agresif Tarama Pili Daha Çok Harcar Ama Çabuk Bulur)
+                allowDuplicates: false
+                // scanMode parametresi sadece Android'e özeldir, iOS'u çökertmemek için kaldırıldı
             });
 
             Ble.addListener('onScanResult', (res) => {
                 const name = res.device.name || res.device.localName || ("Cihaz_" + res.device.deviceId.substring(0, 6));
 
-                // Aynı cihazı tekrar listeye ekleme
                 if (!DISCOVERED_DEVICES.find(d => d.deviceId === res.device.deviceId)) {
                     DISCOVERED_DEVICES.push(res.device);
                     addDeviceToDmList(name, res.rssi, res.device.deviceId);
 
-                    // Cihaz bulursak boş durumu hemen kaldır
+                    CURRENT_SCAN_STATE = 'idle';
                     const emptyState = dmList.querySelector('.empty-state');
                     if (emptyState) emptyState.remove();
                 }
             });
 
-            // Tarama süresi: 15 saniye sürsün
+            // Tarama süresi (15 Saniye limit)
             setTimeout(async () => {
-                await Ble.stopLEScan();
+                try { await Ble.stopLEScan(); } catch (e) { }
                 if (DISCOVERED_DEVICES.length === 0) {
-                    dmList.innerHTML = `<div class="empty-state">
-                        <b>Gerçek P2P Cihazı Bulunamadı.</b><br><br>
-                        Diğer cihazın Bluetooth ayarlarına girmesini ve <b>uygulamanın açık kalmasını</b> isteyin. İki iPhone'un birbirini görmesi için "Ayarlar > Bluetooth" ekranında olmaları gerekir.
-                    </div>`;
+                    CURRENT_SCAN_STATE = 'no_device';
+                    updateEmptyState();
                 }
             }, 15000);
         } catch (e) {
-            console.error("BT Scan Error", e);
-            dmList.innerHTML = `<div class="empty-state">
-                <b>Tarama Hatası P2P:</b> Bluetooth erişimine veya Konum iznine izin vermediniz.<br>
-                Hata Detayı: ${e.message}
-            </div>`;
+            console.error("P2P Tarama Hatası", e);
+            CURRENT_SCAN_STATE = 'error';
+            LAST_ERROR = (e.message || 'Bilinmeyen Hata') + " (Telefon ayarlarından Bluetooth ve Konum'a izin verin)";
+            updateEmptyState();
         }
-
-
     } else {
-        // Plugin Yüklü Değil
-        dmList.innerHTML = `<div class="empty-state">
-            <b>Sistem Hatası: P2P Motoru Bulunamadı!</b><br><br>
-            Lütfen terminalden şu adımları izleyin:<br>
-            <code>npm install @capacitor-community/bluetooth-le</code><br>
-            <code>npx cap sync</code><br>
-            Ardından uygulamayı tekrar Build edin (XCode / Android Studio veya Actions üzerinden).
-        </div>`;
+        CURRENT_SCAN_STATE = 'error';
+        LAST_ERROR = "Sistem Hatası: P2P Motoru (Bluetooth) derlenirken eklenmemiş. Lütfen 'npm i @capacitor-community/bluetooth-le' yapın.";
+        updateEmptyState();
     }
 }
 
