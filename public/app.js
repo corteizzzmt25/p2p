@@ -157,7 +157,7 @@ async function startDiscovery() {
             });
 
             Ble.addListener('onScanResult', (res) => {
-                const name = res.device.name || "P2P Device";
+                const name = res.device.name || res.device.localName || ("Bilinmeyen (ID: " + res.device.deviceId.substring(0, 8) + ")");
                 if (!DISCOVERED_DEVICES.find(d => d.deviceId === res.device.deviceId)) {
                     DISCOVERED_DEVICES.push(res.device);
                     addDeviceToDmList(name, res.rssi, res.device.deviceId);
@@ -168,13 +168,21 @@ async function startDiscovery() {
             setTimeout(async () => {
                 await Ble.stopLEScan();
                 if (DISCOVERED_DEVICES.length === 0) {
-                    dmList.innerHTML = `<div class="empty-state">Gerçek cihaz bulunamadı. Lütfen karşı cihazın görünür olduğundan emin olun.</div>`;
+                    dmList.innerHTML = `<div class="empty-state">
+                        <b>Gerçek cihaz bulunamadı.</b><br><br>
+                        P2P testleri için lütfen her iki cihazda da <b>Ayarlar > Bluetooth</b> menüsünü AÇIK ve EKRANDA tutun. (iPhone'lar ancak bu menü açıkken kendini dışarıya yayınlar). 
+                        Bluetooth'u kapatıp açarak tekrar deneyin.
+                    </div>`;
                 }
             }, 15000);
         } catch (e) {
             console.error("BT Scan Error", e);
-            dmList.innerHTML = `<div class="empty-state">Bağlantı Hatası: Bluetooth veya Konum İzni Gerekli.</div>`;
+            dmList.innerHTML = `<div class="empty-state">
+                <b>Bağlantı Hatası:</b> Bluetooth veya Konum İzni Gerekli. <br><br>
+                (${e.message || 'Bilinmeyen Hata'})
+            </div>`;
         }
+
     } else {
         // Browser Test
         dmList.innerHTML = `<div class="empty-state">${t.no_device}</div>`;
