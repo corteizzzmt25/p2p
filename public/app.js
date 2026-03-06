@@ -92,20 +92,12 @@ window.changeLanguage = (lang) => {
     document.getElementById('login-btn').innerText = t.login_btn;
     document.getElementById('message-input').placeholder = t.placeholder;
     document.getElementById('lang-encryption-msg').innerText = t.encryption_msg;
-    document.getElementById('bt-scan').innerHTML = `<span>${t.bt_label}</span> <div class="bt-wave"></div>`;
+    document.getElementById('bt-scan').innerHTML = (lang === 'tr' ? '<span>Bluetooth P2P</span>' : (lang === 'ar' ? '<span>بلوتوث P2P</span>' : '<span>Bluetooth P2P</span>')) + ' <div class="bt-wave"></div>';
     if (document.getElementById('lang-bt-title')) document.getElementById('lang-bt-title').innerText = t.bt_title;
     if (document.getElementById('close-modal')) document.getElementById('close-modal').innerText = t.bt_close;
 };
 
-// Bluetooth & Permission Logic
-async function requestAllPermissions() {
-    if (window.Capacitor) {
-        try {
-            // Ask for Camera and Mic permissions
-            await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
-        } catch (e) { console.warn("Permissions e:", e); }
-    }
-}
+// Bluetooth Discovery Flow
 
 btScanBtn.addEventListener('click', async () => {
     discoveryModal.style.display = 'flex';
@@ -132,6 +124,23 @@ btScanBtn.addEventListener('click', async () => {
     } else { simulateBluetoothScan(); }
 });
 
+// Close modal when clicking outside
+discoveryModal.addEventListener('click', (e) => {
+    if (e.target === discoveryModal) {
+        discoveryModal.style.display = 'none';
+        if (window.Capacitor && window.Capacitor.Plugins.BluetoothLe) {
+            window.Capacitor.Plugins.BluetoothLe.stopLEScan().catch(() => { });
+        }
+    }
+});
+
+closeModalBtn.addEventListener('click', () => {
+    discoveryModal.style.display = 'none';
+    if (window.Capacitor && window.Capacitor.Plugins.BluetoothLe) {
+        window.Capacitor.Plugins.BluetoothLe.stopLEScan().catch(() => { });
+    }
+});
+
 function addDeviceToList(name, rssi) {
     if (deviceList.innerHTML.includes(translations[CURRENT_LANG].bt_searching)) deviceList.innerHTML = '';
     const item = document.createElement('div');
@@ -142,13 +151,57 @@ function addDeviceToList(name, rssi) {
 }
 
 function simulateBluetoothScan() {
+    const t = translations[CURRENT_LANG];
     setTimeout(() => {
-        deviceList.innerHTML = `<div style="padding: 20px; opacity: 0.6;">Simülatör Aktif: ${CURRENT_LANG === 'tr' ? 'Cihazlar taranıyor...' : 'Scanning...'}</div>`;
-    }, 1500);
+        deviceList.innerHTML = '';
+        addDeviceToList("BitChat-iPhone-11", -45);
+        addDeviceToList("SYP2P-Server", -52);
+        addDeviceToList("Bilinmeyen Cihaz-1", -88);
+        btStatus.innerText = "Cihazlar listeleniyor...";
+    }, 2000);
+}
+
+// Device & Header Adaptation
+function detectDevice() {
+    const ua = navigator.userAgent;
+    const deviceInfo = document.getElementById('device-info');
+    let model = "Mobil Cihaz";
+
+    if (/iPhone/i.test(ua)) {
+        model = "Apple iPhone";
+        if (screen.height >= 812) model = "iPhone Premium (X/11/12+)"; // Notch devices
+    } else if (/Android/i.test(ua)) {
+        model = "Android Cihaz";
+    }
+
+    deviceInfo.innerText = "BitChat P2P • " + model;
+
+    // Add class for specific styling
+    if (model.includes("Premium")) {
+        document.body.classList.add('notch-device');
+    }
+}
+
+// Bluetooth & Permission Logic
+async function requestAllPermissions() {
+    if (window.Capacitor) {
+        try {
+            // Media Permissions
+            await navigator.mediaDevices.getUserMedia({ audio: true, video: true }).catch(err => console.warn("Media missing:", err));
+
+            // Bluetooth Permissions for Android 12+
+            if (window.Capacitor.Plugins.BluetoothLe) {
+                const Ble = window.Capacitor.Plugins.BluetoothLe;
+                await Ble.initialize();
+                await Ble.requestPermissions();
+            }
+        } catch (e) { console.warn("Permissions initialization error:", e); }
+    }
 }
 
 // Auto-Login and focus fixes
 document.addEventListener('DOMContentLoaded', () => {
+    detectDevice();
     requestAllPermissions();
     const savedName = localStorage.getItem('bitcep_username');
     if (savedName) {
