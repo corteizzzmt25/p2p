@@ -127,9 +127,9 @@ async function checkBTStatus() {
             statusText.innerText = '⚠️ Bluetooth Durumu Alınamadı';
         }
     } else {
-        // Tarayıcıda test modunda
-        statusBar.className = 'status-enabled';
-        statusText.innerText = '🖥️ Tarayıcı Test Modu: P2P Aktif';
+        // Plugin Yüklü Değil Veya Çalışmıyor
+        statusBar.className = 'status-disabled';
+        statusText.innerText = '� Kritik Hata: BT Eklentisi Eksik';
     }
 }
 
@@ -199,8 +199,14 @@ async function startDiscovery() {
 
 
     } else {
-        // Browser Test
-        dmList.innerHTML = `<div class="empty-state">${t.no_device}</div>`;
+        // Plugin Yüklü Değil
+        dmList.innerHTML = `<div class="empty-state">
+            <b>Sistem Hatası: P2P Motoru Bulunamadı!</b><br><br>
+            Lütfen terminalden şu adımları izleyin:<br>
+            <code>npm install @capacitor-community/bluetooth-le</code><br>
+            <code>npx cap sync</code><br>
+            Ardından uygulamayı tekrar Build edin (XCode / Android Studio veya Actions üzerinden).
+        </div>`;
     }
 }
 
