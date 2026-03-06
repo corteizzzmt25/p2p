@@ -36,7 +36,8 @@ const CHARACTERISTIC_UUID = '0000ffe1-0000-1000-8000-00805f9b34fb';
 
 // 1. Bluetooth Taraması ve DM Listesi
 async function startDiscovery() {
-    dmList.innerHTML = '<div class="empty-state">Etraf taranıyor... 🇸🇾</div>';
+    dmList.innerHTML = '<div class="empty-state">Etraf taranıyor... 🔍</div>';
+    DISCOVERED_DEVICES = []; // Listeyi temizle
 
     if (window.Capacitor && window.Capacitor.Plugins.BluetoothLe) {
         const Ble = window.Capacitor.Plugins.BluetoothLe;
@@ -55,16 +56,14 @@ async function startDiscovery() {
             setTimeout(async () => {
                 await Ble.stopLEScan();
                 if (DISCOVERED_DEVICES.length === 0) {
-                    dmList.innerHTML = '<div class="empty-state">Yakında cihaz bulunamadı.</div>';
+                    dmList.innerHTML = '<div class="empty-state">Gerçek cihaz bulunamadı. Lütfen Bluetooth cihazınızı "görünür" yapın.</div>';
                 }
-            }, 10000);
-        } catch (e) { console.error("BT Tarama Hatası:", e); }
+            }, 15000);
+        } catch (e) {
+            dmList.innerHTML = '<div class="empty-state">Bluetooth erişim hatası!</div>';
+        }
     } else {
-        // Tarayıcı Test Modu
-        setTimeout(() => {
-            addDeviceToDmList("iPhone 11 (Ahmet)", -40, "DE:AD:BE:EF:01");
-            addDeviceToDmList("Galaxy S21 (Suriye-BT)", -55, "CA:FE:BA:BE:02");
-        }, 1500);
+        dmList.innerHTML = '<div class="empty-state">P2P Modu Aktif (Tarayıcı Simülasyonu)</div>';
     }
 }
 
@@ -86,13 +85,26 @@ function addDeviceToDmList(name, rssi, deviceId) {
 
 // 2. Bağlantı İstek Akışı
 function sendConnectionRequest(name, deviceId) {
-    // Gerçekte burada bir GATT write ile karşıya "CONN_REQ" paketi atılır
-    // Simülasyon: Karşı tarafın isteği kabul ettiğini varsayalım
-    const status = confirm(`${name} cihazına bağlantı isteği gönderilsin mi?`);
-    if (status) {
+    if (!MY_USERNAME) return; // Kullanıcı giriş yapmamışsa istek göndermez/almaz
+
+    // Bağlantı isteği modalını hazırla ve göster
+    const requestTitle = document.getElementById('request-title');
+    const requestMsg = document.getElementById('request-msg');
+
+    requestTitle.innerText = "Bağlantı İsteği";
+    requestMsg.innerText = `${name} seninle güvenli P2P kanalı üzerinden mesajlaşmak istiyor. 🇸🇾`;
+
+    requestModal.style.display = 'flex';
+
+    acceptBtn.onclick = () => {
+        requestModal.style.display = 'none';
         CURRENT_CHAT_DEVICE = { name, deviceId };
         openChat(name);
-    }
+    };
+
+    refuseBtn.onclick = () => {
+        requestModal.style.display = 'none';
+    };
 }
 
 function openChat(name) {
