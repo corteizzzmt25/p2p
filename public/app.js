@@ -26,6 +26,7 @@ let DISCOVERED_DEVICES = [];
 let CHAT_HISTORIES = {};
 let CURRENT_SCAN_STATE = 'idle';
 let LAST_ERROR = '';
+let scanListener = null; // To prevent adding multiple listeners and crashing
 
 // Crash Loop Guard: Eğer uygulama tarama yaparken çökmüşse son otomasyonu sil
 if (localStorage.getItem('bt_crash_guard')) {
@@ -190,35 +191,50 @@ async function startDiscovery() {
     updateEmptyState();
     DISCOVERED_DEVICES = [];
 
-    // Taramaya geçerken çökmeye karşı guard ekliyoruz. Survived ise birazdan sileceğiz.
+    // Taramaya geçerken çökmeye karşı guard ekliyoruz.
     localStorage.setItem('bt_crash_guard', '1');
 
     if (window.Capacitor && window.Capacitor.Plugins.BluetoothLe) {
         const Ble = window.Capacitor.Plugins.BluetoothLe;
+
+        // Remove previous listener to prevent memory leak and rapid crashes on older devices (iPhone 6S etc.)
+        if (scanListener) {
+            try { await scanListener.remove(); } catch (e) { console.log(e); }
+            scanListener = null;
+        }
+
         try {
-            // Sadece Android için yetkiler ve enable prompt'u
-            if (window.Capacitor.getPlatform() === 'android') {
-                try { await Ble.requestPermissions(); } catch (e) { }
-                try { await Ble.enable(); } catch (e) { }
+            const platform = window.Capacitor.getPlatform();
+
+            if (platform === 'android') {
+                try { await Ble.initialize(); IS_BT_INITIALIZED = true; } catch (e) { console.log("Android Init err:", e); IS_BT_INITIALIZED = true; }
+                try { await Ble.requestPermissions(); } catch (e) { console.warn("Perm req err:", e); }
+                try { await Ble.enable(); } catch (e) { console.warn("Enable err:", e); }
+            } else if (platform === 'ios') {
+                try {
+                    await Ble.initialize();
+                    IS_BT_INITIALIZED = true;
+                } catch (e) {
+                    console.log("iOS BT Init Hatası:", e);
+                    IS_BT_INITIALIZED = true;
+                }
+            } else {
+                try { await Ble.initialize(); IS_BT_INITIALIZED = true; } catch (e) { }
             }
 
-            // GÜVENLİ INITIALIZE (Bu adım iOS'ta Yetki Pop-Up'ını çıkartır)
-            try {
-                await Ble.initialize();
-                IS_BT_INITIALIZED = true;
-            } catch (e) { console.log("BT Init Hatası:", e); IS_BT_INITIALIZED = true; }
-
-            // İOS CRASH ENGELLEYİCİ - CRITICAL FIX
-            // iPhone'da "İzin Ver" tuşuna basana kadar state .poweredOn olmaz. O esnada scan başlarsa sistem Crash verir! (API Misuse)
-            // Bu sebeple cihaz TAMAMEN hazır (isEnabled === true) olana kadar bir döngüyle bekliyoruz!
+            // GÜVENLİ DURUM KONTROLÜ - CRITICAL FIX
             let isReady = false;
             for (let i = 0; i < 20; i++) {
-                const check = await Ble.isEnabled();
-                if (check && check.value === true) {
-                    isReady = true;
-                    break;
+                try {
+                    const check = await Ble.isEnabled();
+                    if (check && check.value === true) {
+                        isReady = true;
+                        break;
+                    }
+                } catch (err) {
+                    console.warn("BT Check Pending...");
                 }
-                await new Promise(r => setTimeout(r, 1000)); // 1 saniye bekle (Kullanıcının Pop-Up'ı onaylamasını bekliyor)
+                await new Promise(r => setTimeout(r, 1000));
             }
 
             if (!isReady) {
@@ -228,17 +244,14 @@ async function startDiscovery() {
             // Çökmeyi başarıyla geçtik, guard'ı kaldır.
             localStorage.removeItem('bt_crash_guard');
 
-            // Taramayı Başlat (services dizisini TAMAMEN KESTİM, boş dizi yollamak da iOS'ta çökertiyor)
-            await Ble.requestLEScan({
-                allowDuplicates: false
-            });
-
-            Ble.addListener('onScanResult', (res) => {
+            // Kayıtlı listener'ı güvenli ref'e al
+            scanListener = await Ble.addListener('onScanResult', (res) => {
+                if (!res || !res.device) return;
                 const name = res.device.name || res.device.localName || ("Cihaz_" + res.device.deviceId.substring(0, 6));
 
                 if (!DISCOVERED_DEVICES.find(d => d.deviceId === res.device.deviceId)) {
                     DISCOVERED_DEVICES.push(res.device);
-                    addDeviceToDmList(name, res.rssi, res.device.deviceId);
+                    addDeviceToDmList(name, res.rssi || -99, res.device.deviceId);
 
                     CURRENT_SCAN_STATE = 'idle';
                     const emptyState = dmList.querySelector('.empty-state');
@@ -246,9 +259,14 @@ async function startDiscovery() {
                 }
             });
 
-            checkBTStatus(); // Son bir durum güncellemesi
+            // Taramayı Başlat 
+            await Ble.requestLEScan({
+                allowDuplicates: false
+            });
 
-            // Tarama süresi (15 Saniye limit)
+            checkBTStatus();
+
+            // Tarama süresi
             setTimeout(async () => {
                 try { await Ble.stopLEScan(); } catch (e) { }
                 if (DISCOVERED_DEVICES.length === 0) {
@@ -256,6 +274,7 @@ async function startDiscovery() {
                     updateEmptyState();
                 }
             }, 15000);
+
         } catch (e) {
             localStorage.removeItem('bt_crash_guard');
             console.error("P2P Tarama Hatası", e);
