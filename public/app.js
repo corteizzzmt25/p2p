@@ -286,6 +286,8 @@ g('login-btn').onclick = (e) => {
         lo.classList.add('loader-hidden');
         g('login-overlay').style.display = 'none';
         updateSettingsProfile();
+        // Yeni kullanıcı girişi: izinleri hemen iste
+        setTimeout(requestPermissionsOnStartup, 500);
     }, 1100);
 };
 g('username-input').onkeypress = (e) => { if (e.key === 'Enter') g('login-btn').click(); };
@@ -366,15 +368,28 @@ function updatePermBadge(id, granted) {
 // ============ WebRTC ============
 const ICE = { iceServers: [] };
 
-function createPeerConnection(onIceDone, onMessage) {
+// ICE toplamayı bekler ve bitince localDescription'u döndürür
+function waitForICE(pc) {
+    return new Promise((resolve) => {
+        if (pc.iceGatheringState === 'complete') {
+            resolve(pc.localDescription);
+            return;
+        }
+        const check = () => {
+            if (pc.iceGatheringState === 'complete') {
+                pc.removeEventListener('icegatheringstatechange', check);
+                resolve(pc.localDescription);
+            }
+        };
+        pc.addEventListener('icegatheringstatechange', check);
+        // Güvenlik: 3 saniye sonra ne olursa olsun geç
+        setTimeout(() => resolve(pc.localDescription), 3000);
+    });
+}
+
+function createPeer(onMessage) {
     closePeer();
     peerConnection = new RTCPeerConnection(ICE);
-
-    peerConnection.onicegatheringstatechange = () => {
-        if (peerConnection.iceGatheringState === 'complete') {
-            onIceDone(peerConnection.localDescription);
-        }
-    };
 
     peerConnection.ondatachannel = (event) => {
         dataChannel = event.channel;
@@ -392,7 +407,7 @@ function createPeerConnection(onIceDone, onMessage) {
 function setupDataChannel(onMessage) {
     dataChannel.onopen = () => onConnectionEstablished();
     dataChannel.onmessage = (evt) => {
-        try { const msg = JSON.parse(evt.data); onMessage(msg); } catch (e) { }
+        try { const msg = JSON.parse(evt.data); receiveMessageWithType(msg); } catch (e) { }
     };
     dataChannel.onclose = handleDisconnect;
 }
@@ -406,17 +421,28 @@ function closePeer() {
 // ============ HOST AKIŞI ============
 window.startAsHost = async () => {
     showQRStep('step-host-qr');
+    // Canvas görünür hale gelmesini bekle
+    await new Promise(r => setTimeout(r, 100));
 
-    const pc = createPeerConnection(async (localDesc) => {
-        const offerStr = JSON.stringify({ sdp: localDesc.sdp, type: localDesc.type, from: MY_USERNAME });
+    try {
+        const pc = createPeer(receiveMessageWithType);
+
+        // DataChannel'i HOST açar
+        dataChannel = pc.createDataChannel('chat', { ordered: true });
+        setupDataChannel(receiveMessageWithType);
+
+        // Offer oluştur ve ICE topla
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        const desc = await waitForICE(pc);
+
+        // QR'a yaz
+        const offerStr = JSON.stringify({ sdp: desc.sdp, type: desc.type, from: MY_USERNAME });
         await generateQR('qr-canvas', offerStr);
-    }, receiveMessage);
-
-    dataChannel = pc.createDataChannel('chat', { ordered: true });
-    setupDataChannel(receiveMessage);
-
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
+    } catch (e) {
+        console.error('Host offer error:', e);
+        alert('QR oluşturulamadı: ' + e.message);
+    }
 };
 
 window.hostStep2 = () => {
@@ -427,8 +453,9 @@ window.hostStep2 = () => {
             const answer = JSON.parse(data);
             CURRENT_CHAT_PEER = { name: answer.from || 'Karşı Taraf' };
             showQRStep('step-connecting');
-            await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+            await peerConnection.setRemoteDescription(new RTCSessionDescription({ sdp: answer.sdp, type: answer.type }));
         } catch (e) {
+            console.error('Host step2 error:', e);
             showQRStep('step-host-scan');
         }
     });
@@ -443,16 +470,23 @@ window.startAsGuest = () => {
             const offer = JSON.parse(data);
             CURRENT_CHAT_PEER = { name: offer.from || 'Karşı Taraf' };
 
-            const pc = createPeerConnection(async (localDesc) => {
-                const answerStr = JSON.stringify({ sdp: localDesc.sdp, type: localDesc.type, from: MY_USERNAME });
-                showQRStep('step-guest-qr');
-                await generateQR('qr-canvas2', answerStr);
-            }, receiveMessage);
+            const pc = createPeer(receiveMessageWithType);
 
-            await pc.setRemoteDescription(new RTCSessionDescription(offer));
+            // Offer'i al, Answer oluştur, ICE topla
+            await pc.setRemoteDescription(new RTCSessionDescription({ sdp: offer.sdp, type: offer.type }));
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
+            const desc = await waitForICE(pc);
+
+            // Cevap QR'ını göster
+            showQRStep('step-guest-qr');
+            await new Promise(r => setTimeout(r, 100)); // canvas visible
+            const answerStr = JSON.stringify({ sdp: desc.sdp, type: desc.type, from: MY_USERNAME });
+            await generateQR('qr-canvas2', answerStr);
+
         } catch (e) {
+            console.error('Guest error:', e);
+            alert('Hata: ' + e.message);
             showQRStep('step-guest-scan');
         }
     });
@@ -705,6 +739,29 @@ window.onclick = () => {
     g('chat-lang-options')?.classList.add('lang-options-hidden');
 };
 
+// ============ UYGULAMA AÇILIŞINDA İZİN İSTE ============
+async function requestPermissionsOnStartup() {
+    // Kamera izni
+    try {
+        const s = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        s.getTracks().forEach(t => t.stop());
+        camPermGranted = true;
+    } catch (e) {
+        camPermGranted = false;
+    }
+    updatePermBadge('camera-perm-badge', camPermGranted);
+
+    // Mikrofon izni
+    try {
+        const s = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        s.getTracks().forEach(t => t.stop());
+        micPermGranted = true;
+    } catch (e) {
+        micPermGranted = false;
+    }
+    updatePermBadge('mic-perm-badge', micPermGranted);
+}
+
 // ============ BAŞLAT ============
 document.addEventListener('DOMContentLoaded', () => {
     applyDarkMode();
@@ -716,5 +773,7 @@ document.addEventListener('DOMContentLoaded', () => {
         MY_USERNAME = saved;
         g('login-overlay').style.display = 'none';
         updateSettingsProfile();
+        // Kayıtlı kullanıcı varsa hemen izin iste
+        setTimeout(requestPermissionsOnStartup, 800);
     }
 });
