@@ -28,6 +28,25 @@ let CURRENT_SCAN_STATE = 'idle';
 let LAST_ERROR = '';
 let scanListener = null; // To prevent adding multiple listeners and crashing
 
+// --- 🔴 GELİŞMİŞ EKRAN HATA AYIKLAYICI (DEBUGGER) ---
+// iPhone 6S veya diğer cihazlarda nerede tıkandığını tam görebilmek için:
+const debugLog = (msg, isError) => {
+    console.log("DEBUG:", msg);
+    let devPanel = document.getElementById('dev-debug-panel');
+    if (!devPanel) {
+        devPanel = document.createElement('div');
+        devPanel.id = 'dev-debug-panel';
+        devPanel.style.cssText = 'position:fixed; bottom:0; left:0; width:100%; max-height:150px; background:rgba(0,0,0,0.85); color:#0f0; font-family:monospace; font-size:11px; overflow-y:auto; z-index:9999; padding:10px; pointer-events:none; border-top:2px solid #0f0;';
+        document.body.appendChild(devPanel);
+    }
+    const line = document.createElement('div');
+    line.style.color = isError ? '#ff4444' : '#00ff00';
+    line.innerText = `[${new Date().toLocaleTimeString()}] ${typeof msg === 'object' ? JSON.stringify(msg) : msg}`;
+    devPanel.appendChild(line);
+    devPanel.scrollTop = devPanel.scrollHeight;
+};
+// ----------------------------------------------------
+
 // Crash Loop Guard: Eğer uygulama tarama yaparken çökmüşse son otomasyonu sil
 if (localStorage.getItem('bt_crash_guard')) {
     localStorage.removeItem('bt_crash_guard');
@@ -190,61 +209,68 @@ async function startDiscovery() {
     CURRENT_SCAN_STATE = 'scanning';
     updateEmptyState();
     DISCOVERED_DEVICES = [];
+    debugLog("--- TARAMA BAŞLATILDI ---");
 
-    // Taramaya geçerken çökmeye karşı guard ekliyoruz.
     localStorage.setItem('bt_crash_guard', '1');
 
     if (window.Capacitor && window.Capacitor.Plugins.BluetoothLe) {
         const Ble = window.Capacitor.Plugins.BluetoothLe;
 
-        // Remove previous listener to prevent memory leak and rapid crashes on older devices (iPhone 6S etc.)
         if (scanListener) {
-            try { await scanListener.remove(); } catch (e) { console.log(e); }
+            try {
+                await scanListener.remove();
+                debugLog("Eski dinleyici silindi.");
+            } catch (e) {
+                debugLog("Eski dinleyici silinirken hata: " + e.message, true);
+            }
             scanListener = null;
         }
 
         try {
             const platform = window.Capacitor.getPlatform();
+            debugLog("Platform algılandı: " + platform);
 
             if (platform === 'android') {
-                try { await Ble.initialize(); IS_BT_INITIALIZED = true; } catch (e) { console.log("Android Init err:", e); IS_BT_INITIALIZED = true; }
-                try { await Ble.requestPermissions(); } catch (e) { console.warn("Perm req err:", e); }
-                try { await Ble.enable(); } catch (e) { console.warn("Enable err:", e); }
+                try { await Ble.initialize(); IS_BT_INITIALIZED = true; debugLog("Android: Motor başlatıldı."); } catch (e) { debugLog("Android Init Hata: " + e.message, true); IS_BT_INITIALIZED = true; }
+                try { await Ble.requestPermissions(); debugLog("Android: İzinler istendi."); } catch (e) { debugLog("Perm Hata: " + e.message, true); }
+                try { await Ble.enable(); debugLog("Android: Bluetooth açılması istendi."); } catch (e) { debugLog("Enable Hata: " + e.message, true); }
             } else if (platform === 'ios') {
                 try {
                     await Ble.initialize();
                     IS_BT_INITIALIZED = true;
+                    debugLog("iOS: Motor başlatıldı.");
                 } catch (e) {
-                    console.log("iOS BT Init Hatası:", e);
+                    debugLog("iOS BT Init Hatası: " + e.message, true);
                     IS_BT_INITIALIZED = true;
                 }
             } else {
                 try { await Ble.initialize(); IS_BT_INITIALIZED = true; } catch (e) { }
             }
 
-            // GÜVENLİ DURUM KONTROLÜ - CRITICAL FIX
+            // GÜVENLİ DURUM KONTROLÜ
+            debugLog("Cihaz hazırlık durumu kontrol ediliyor...");
             let isReady = false;
             for (let i = 0; i < 20; i++) {
                 try {
                     const check = await Ble.isEnabled();
                     if (check && check.value === true) {
                         isReady = true;
+                        debugLog("Bluetooth açık ve hazır! (Test geçildi)");
                         break;
                     }
                 } catch (err) {
-                    console.warn("BT Check Pending...");
+                    debugLog("Bekleniyor (" + i + ")...", true);
                 }
                 await new Promise(r => setTimeout(r, 1000));
             }
 
             if (!isReady) {
-                throw new Error("Kullanıcı BT izni vermedi veya Motor Açılamadı.");
+                throw new Error("BT motoru zaman aşımına uğradı veya izniniz yok.");
             }
 
-            // Çökmeyi başarıyla geçtik, guard'ı kaldır.
             localStorage.removeItem('bt_crash_guard');
 
-            // Kayıtlı listener'ı güvenli ref'e al
+            debugLog("Dinleyici (Listener) kaydediliyor...");
             scanListener = await Ble.addListener('onScanResult', (res) => {
                 if (!res || !res.device) return;
                 const name = res.device.name || res.device.localName || ("Cihaz_" + res.device.deviceId.substring(0, 6));
@@ -259,15 +285,17 @@ async function startDiscovery() {
                 }
             });
 
-            // Taramayı Başlat 
+            debugLog("LE Taraması (requestLEScan) tetikleniyor...");
             await Ble.requestLEScan({
+                services: [], // CRITICAL FIX: Empty array explicitly specified to prevent null pointer crashes on iOS native Bridge
                 allowDuplicates: false
             });
+            debugLog("Tarama motoru başarıyla çalışıyor! Cihazlar aranıyor...");
 
             checkBTStatus();
 
-            // Tarama süresi
             setTimeout(async () => {
+                debugLog("15 sn doldu, tarama durduruluyor.");
                 try { await Ble.stopLEScan(); } catch (e) { }
                 if (DISCOVERED_DEVICES.length === 0) {
                     CURRENT_SCAN_STATE = 'no_device';
@@ -277,15 +305,16 @@ async function startDiscovery() {
 
         } catch (e) {
             localStorage.removeItem('bt_crash_guard');
-            console.error("P2P Tarama Hatası", e);
+            debugLog("KRİTİK HATA: " + e.message, true);
             CURRENT_SCAN_STATE = 'error';
             LAST_ERROR = (e.message || 'Bilinmeyen Hata') + " (Telefon ayarlarından Bluetooth yetkisi gereklidir)";
             updateEmptyState();
         }
     } else {
         localStorage.removeItem('bt_crash_guard');
+        debugLog("EKLENTİ YOK: Capacitor-bluetooth-le bulunamadı!", true);
         CURRENT_SCAN_STATE = 'error';
-        LAST_ERROR = "Sistem Hatası: P2P Motoru (Bluetooth) derlenirken eklenmemiş. Lütfen 'npm i @capacitor-community/bluetooth-le' yapın.";
+        LAST_ERROR = "Sistem Hatası: P2P Motoru (Bluetooth) derlenirken eklenmemiş.";
         updateEmptyState();
     }
 }
