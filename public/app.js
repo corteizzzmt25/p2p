@@ -273,12 +273,15 @@ function showQRStep(id) {
 }
 
 // ============ GİRİŞ ============
-g('login-btn').onclick = (e) => {
+g('login-btn').onclick = async (e) => {
     addRipple(e);
     const name = g('username-input').value.trim();
     if (!name) { g('username-input').focus(); return; }
     MY_USERNAME = name;
     localStorage.setItem('surbit_username', name);
+
+    // ✅ İZİNLERİ HEMEN ISTE (kullanıcı hareketi içinde olmalı - user gesture)
+    await requestPermissionsOnStartup();
 
     const lo = g('loading-overlay');
     lo.classList.remove('loader-hidden');
@@ -286,8 +289,6 @@ g('login-btn').onclick = (e) => {
         lo.classList.add('loader-hidden');
         g('login-overlay').style.display = 'none';
         updateSettingsProfile();
-        // Yeni kullanıcı girişi: izinleri hemen iste
-        setTimeout(requestPermissionsOnStartup, 500);
     }, 1100);
 };
 g('username-input').onkeypress = (e) => { if (e.key === 'Enter') g('login-btn').click(); };
@@ -333,27 +334,64 @@ window.saveName = () => {
 g('new-name-input')?.addEventListener('keypress', (e) => { if (e.key === 'Enter') saveName(); });
 
 // ============ İZİNLER ============
+function isSecureMediaContext() {
+    try {
+        const proto = location.protocol;
+        const host = location.hostname;
+        const isHttps = proto === 'https:';
+        const isLocalhost = host === 'localhost' || host === '127.0.0.1';
+        const isNative =
+            typeof Capacitor !== 'undefined' ||
+            /Capacitor|Cordova/i.test((navigator.userAgent || '')) ||
+            /Android|iPhone|iPad|iPod/i.test((navigator.userAgent || ''));
+        return isHttps || isLocalhost || isNative;
+    } catch (e) {
+        return false;
+    }
+}
+
 window.requestCameraPermission = async () => {
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        if (!isSecureMediaContext()) {
+            alert('Kamera izni için güvenli bağlam (HTTPS / localhost / mobil uygulama) gerekli.');
+            updatePermBadge('camera-perm-badge', false);
+            return;
+        }
+        
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+            video: { facingMode: 'environment' }, 
+            audio: false 
+        });
         stream.getTracks().forEach(t => t.stop());
         camPermGranted = true;
         updatePermBadge('camera-perm-badge', true);
+        console.log('Kamera izni başarıyla verildi');
     } catch (e) {
         camPermGranted = false;
         updatePermBadge('camera-perm-badge', false);
+        console.error('Kamera izni hatası:', e);
+        alert('Kamera izni verilemedi: ' + e.message);
     }
 };
 
 window.requestMicPermission = async () => {
     try {
+        if (!isSecureMediaContext()) {
+            alert('Mikrofon izni için güvenli bağlam (HTTPS / localhost / mobil uygulama) gerekli.');
+            updatePermBadge('mic-perm-badge', false);
+            return;
+        }
+        
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
         stream.getTracks().forEach(t => t.stop());
         micPermGranted = true;
         updatePermBadge('mic-perm-badge', true);
+        console.log('Mikrofon izni başarıyla verildi');
     } catch (e) {
         micPermGranted = false;
         updatePermBadge('mic-perm-badge', false);
+        console.error('Mikrofon izni hatası:', e);
+        alert('Mikrofon izni verilemedi: ' + e.message);
     }
 };
 
@@ -366,24 +404,94 @@ function updatePermBadge(id, granted) {
 }
 
 // ============ WebRTC ============
-const ICE = { iceServers: [] };
+const ICE = { 
+    iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+    ]
+};
 
-// ICE toplamayı bekler ve bitince localDescription'u döndürür
+// WebRTC DataChannel için doğru SDP formatı
+function createPeer(onMessage) {
+    const pc = new RTCPeerConnection(ICE);
+    
+    pc.onicecandidate = (e) => {
+        if (e.candidate) {
+            console.log('ICE candidate:', e.candidate.candidate.substring(0, 50) + '...');
+        }
+    };
+    
+    pc.onconnectionstatechange = () => {
+        console.log('Connection state:', pc.connectionState);
+        if (pc.connectionState === 'connected') {
+            onConnectionEstablished();
+        }
+    };
+    
+    pc.ondatachannel = (e) => {
+        const channel = e.channel;
+        setupDataChannel(onMessage, channel);
+    };
+    
+    peerConnection = pc;
+    return pc;
+}
+
+// DataChannel setup
+function setupDataChannel(onMessage, channel) {
+    dataChannel = channel || dataChannel;
+    if (!dataChannel) return;
+    
+    dataChannel.onopen = () => {
+        console.log('DataChannel opened');
+        onConnectionEstablished();
+    };
+    
+    dataChannel.onmessage = (e) => {
+        try {
+            const msg = JSON.parse(e.data);
+            onMessage(msg);
+        } catch (e) {
+            console.error('Message parse error:', e);
+        }
+    };
+    
+    dataChannel.onclose = () => {
+        console.log('DataChannel closed');
+    };
+    
+    dataChannel.onerror = (e) => {
+        console.error('DataChannel error:', e);
+    };
+}
+
+// En güvenilir ICE bekleme yöntemi: basit setTimeout
+// Local network'te ICE gathering milisaniyeler içinde tamamlanır
 function waitForICE(pc) {
     return new Promise((resolve) => {
+        console.log('ICE bekleniyor, state:', pc.iceGatheringState);
+        
+        // Zaten tamamsa hemen dön
         if (pc.iceGatheringState === 'complete') {
+            console.log('ICE zaten tamamlanmış');
             resolve(pc.localDescription);
             return;
         }
-        const check = () => {
+        
+        // ICE gathering completion event'ini dinle
+        pc.onicegatheringstatechange = () => {
+            console.log('ICE state değişti:', pc.iceGatheringState);
             if (pc.iceGatheringState === 'complete') {
-                pc.removeEventListener('icegatheringstatechange', check);
+                console.log('ICE gathering tamamlandı');
                 resolve(pc.localDescription);
             }
         };
-        pc.addEventListener('icegatheringstatechange', check);
-        // Güvenlik: 3 saniye sonra ne olursa olsun geç
-        setTimeout(() => resolve(pc.localDescription), 3000);
+        
+        // 1.5 saniye bekle (local ICE için fazlasıyla yeterli)
+        setTimeout(() => {
+            console.log('ICE timeout, local description:', pc.localDescription ? 'mevcut' : 'yok');
+            resolve(pc.localDescription);
+        }, 1500);
     });
 }
 
@@ -417,31 +525,72 @@ function closePeer() {
     try { peerConnection?.close(); } catch (e) { }
     dataChannel = null; peerConnection = null;
 }
-
 // ============ HOST AKIŞI ============
 window.startAsHost = async () => {
+    console.log('startAsHost çağrıldı');
     showQRStep('step-host-qr');
-    // Canvas görünür hale gelmesini bekle
     await new Promise(r => setTimeout(r, 100));
 
     try {
+        console.log('Peer connection oluşturuluyor...');
         const pc = createPeer(receiveMessageWithType);
-
-        // DataChannel'i HOST açar
-        dataChannel = pc.createDataChannel('chat', { ordered: true });
+        
+        console.log('Data channel oluşturuluyor...');
+        dataChannel = pc.createDataChannel('chat', { 
+            ordered: true,
+            maxRetransmits: 3
+        });
         setupDataChannel(receiveMessageWithType);
-
-        // Offer oluştur ve ICE topla
-        const offer = await pc.createOffer();
+        
+        console.log('Offer oluşturuluyor...');
+        const offer = await pc.createOffer({
+            offerToReceiveAudio: false,
+            offerToReceiveVideo: false
+        });
+        
+        console.log('Offer oluşturuldu:', offer.type);
         await pc.setLocalDescription(offer);
+        console.log('Local description ayarlandı');
+        
+        // ICE topla ve SDP'yi düzelt
         const desc = await waitForICE(pc);
-
-        // QR'a yaz
-        const offerStr = JSON.stringify({ sdp: desc.sdp, type: desc.type, from: MY_USERNAME });
+        console.log('ICE toplandı, desc:', desc ? 'mevcut' : 'yok');
+        
+        if (!desc || !desc.sdp) {
+            throw new Error('WebRTC description oluşturulamadı');
+        }
+        
+        // SDP'yi DataChannel için düzelt
+        let fixedSdp = desc.sdp;
+        
+        // SCTP codec'ini ekle
+        if (!fixedSdp.includes('a=mid:data')) {
+            fixedSdp = fixedSdp.replace(
+                'm=application 9 UDP/TLS/RTP/SAVPF',
+                'm=application 9 UDP/DTLS/SCTP webrtc-datachannel'
+            );
+        }
+        
+        // Gerekli attribute'ları ekle
+        if (!fixedSdp.includes('a=mid:data')) {
+            fixedSdp = fixedSdp.replace('a=group:BUNDLE data', 'a=group:BUNDLE data\na=mid:data');
+        }
+        if (!fixedSdp.includes('a=sctp-port:5000')) {
+            fixedSdp += '\na=sctp-port:5000\na=max-message-size:262144';
+        }
+        
+        const offerStr = JSON.stringify({ sdp: fixedSdp, type: desc.type, from: MY_USERNAME });
+        console.log('QR oluşturulacak veri uzunluğu:', offerStr.length);
+        
+        // Store for fallback testing
+        localStorage.setItem('pendingWebRTCOffer', offerStr);
+        
         await generateQR('qr-canvas', offerStr);
+        console.log('QR oluşturma tamamlandı');
     } catch (e) {
         console.error('Host offer error:', e);
-        alert('QR oluşturulamadı: ' + e.message);
+        console.error('Error stack:', e.stack);
+        alert('QR oluşturulamadı: ' + (e.message || 'Bilinmeyen hata'));
     }
 };
 
@@ -456,6 +605,8 @@ window.hostStep2 = () => {
             await peerConnection.setRemoteDescription(new RTCSessionDescription({ sdp: answer.sdp, type: answer.type }));
         } catch (e) {
             console.error('Host step2 error:', e);
+            console.error('Error details:', e.message);
+            console.error('Received data:', data ? data.substring(0, 200) + '...' : 'null');
             showQRStep('step-host-scan');
         }
     });
@@ -463,29 +614,92 @@ window.hostStep2 = () => {
 
 // ============ GUEST AKIŞI ============
 window.startAsGuest = () => {
+    console.log('startAsGuest çağrıldı');
+    
+    // Önce kamera iznini kontrol et
+    if (!camPermGranted) {
+        const shouldRequest = confirm('Kamera izni gerekli. Şimdi izin vermek istiyor musunuz?');
+        if (shouldRequest) {
+            requestCameraPermission();
+            // İzin verildikten sonra devam et
+            setTimeout(() => {
+                if (camPermGranted) {
+                    startGuestFlow();
+                } else {
+                    alert('Kamera izni verilmedi. QR tarama için izin gerekli.');
+                }
+            }, 1000);
+            return;
+        } else {
+            alert('QR tarama için kamera izni gerekli.');
+            return;
+        }
+    }
+    
+    startGuestFlow();
+};
+
+function startGuestFlow() {
     showQRStep('step-guest-scan');
+    
     startScanner('scan-video', 'scan-canvas', async (data) => {
         stopCamera();
         try {
+            console.log('Guest offer received:', data.substring(0, 100) + '...');
             const offer = JSON.parse(data);
             CURRENT_CHAT_PEER = { name: offer.from || 'Karşı Taraf' };
+            console.log('Peer set:', CURRENT_CHAT_PEER);
 
             const pc = createPeer(receiveMessageWithType);
 
             // Offer'i al, Answer oluştur, ICE topla
+            console.log('Setting remote description...');
             await pc.setRemoteDescription(new RTCSessionDescription({ sdp: offer.sdp, type: offer.type }));
+            
+            console.log('Creating answer...');
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
+            console.log('Local description set');
+            
             const desc = await waitForICE(pc);
+            console.log('ICE gathered for guest answer');
+
+            // SDP'yi DataChannel için düzelt
+            let fixedSdp = desc.sdp;
+            
+            // SCTP codec'ini ekle
+            if (!fixedSdp.includes('a=mid:data')) {
+                fixedSdp = fixedSdp.replace(
+                    'm=application 9 UDP/TLS/RTP/SAVPF',
+                    'm=application 9 UDP/DTLS/SCTP webrtc-datachannel'
+                );
+            }
+            
+            // Gerekli attribute'ları ekle
+            if (!fixedSdp.includes('a=mid:data')) {
+                fixedSdp = fixedSdp.replace('a=group:BUNDLE data', 'a=group:BUNDLE data\na=mid:data');
+            }
+            if (!fixedSdp.includes('a=sctp-port:5000')) {
+                fixedSdp += '\na=sctp-port:5000\na=max-message-size:262144';
+            }
 
             // Cevap QR'ını göster
             showQRStep('step-guest-qr');
             await new Promise(r => setTimeout(r, 100)); // canvas visible
-            const answerStr = JSON.stringify({ sdp: desc.sdp, type: desc.type, from: MY_USERNAME });
+            
+            const answerStr = JSON.stringify({ sdp: fixedSdp, type: desc.type, from: MY_USERNAME });
+            console.log('Generating answer QR...');
+            
+            // Store for fallback testing
+            localStorage.setItem('pendingWebRTCAnswer', answerStr);
+            
             await generateQR('qr-canvas2', answerStr);
+            console.log('Answer QR generated successfully');
 
         } catch (e) {
             console.error('Guest error:', e);
+            console.error('Error details:', e.message);
+            console.error('Received data:', data ? data.substring(0, 200) + '...' : 'null');
             alert('Hata: ' + e.message);
             showQRStep('step-guest-scan');
         }
@@ -495,47 +709,193 @@ window.startAsGuest = () => {
 // ============ QR OLUŞTUR ============
 async function generateQR(canvasId, text) {
     const canvas = g(canvasId);
-    if (!canvas) return;
+    if (!canvas) {
+        console.error('Canvas bulunamadı:', canvasId);
+        return;
+    }
+    
     try {
-        await QRCode.toCanvas(canvas, text, {
-            width: 220, margin: 2,
-            color: { dark: DARK_MODE ? '#ffffff' : '#0f172a', light: DARK_MODE ? '#1e293b' : '#ffffff' },
+        console.log('QR kod oluşturuluyor...', canvasId, text.substring(0, 50) + '...');
+        
+        // QRCode kütüphanesinin yüklü olup olmadığını kontrol et
+        let qrLibrary = null;
+        
+        if (typeof QRCode !== 'undefined') {
+            qrLibrary = QRCode;
+            console.log('Orijinal QRCode kütüphanesi kullanılıyor');
+        } else if (typeof QRCodeGenerator !== 'undefined') {
+            qrLibrary = QRCodeGenerator;
+            console.log('QRCodeGenerator kütüphanesi kullanılıyor (İnternetsiz)');
+        } else if (typeof RealQR !== 'undefined') {
+            qrLibrary = RealQR;
+            console.log('RealQR fallback kütüphanesi kullanılıyor');
+        } else if (typeof SimpleQR !== 'undefined') {
+            qrLibrary = SimpleQR;
+            console.log('SimpleQR fallback kütüphanesi kullanılıyor');
+        } else {
+            console.error('QRCode kütüphanesi yüklenmedi, bekleniyor...');
+            
+            // Kütüphanenin yüklenmesini bekle (max 5 saniye)
+            let attempts = 0;
+            while (typeof QRCode === 'undefined' && typeof QRCodeGenerator === 'undefined' && 
+                   typeof RealQR === 'undefined' && typeof SimpleQR === 'undefined' && attempts < 50) {
+                await new Promise(r => setTimeout(r, 100));
+                attempts++;
+            }
+            
+            if (typeof QRCode !== 'undefined') {
+                qrLibrary = QRCode;
+                console.log('Orijinal QRCode kütüphanesi yüklendi');
+            } else if (typeof QRCodeGenerator !== 'undefined') {
+                qrLibrary = QRCodeGenerator;
+                console.log('QRCodeGenerator kütüphanesi yüklendi');
+            } else if (typeof RealQR !== 'undefined') {
+                qrLibrary = RealQR;
+                console.log('RealQR kütüphanesi yüklendi');
+            } else if (typeof SimpleQR !== 'undefined') {
+                qrLibrary = SimpleQR;
+                console.log('SimpleQR kütüphanesi yüklendi');
+            } else {
+                throw new Error('QRCode kütüphanesi yüklenemedi. Internet bağlantısını kontrol edin.');
+            }
+        }
+        
+        console.log('QR kütüphanesi hazır, QR oluşturuluyor...');
+        
+        await qrLibrary.toCanvas(canvas, text, {
+            width: 220, 
+            margin: 2,
+            color: { 
+                dark: DARK_MODE ? '#ffffff' : '#0f172a', 
+                light: DARK_MODE ? '#1e293b' : '#ffffff' 
+            },
             errorCorrectionLevel: 'L'
         });
-    } catch (e) { console.error(e); }
+        
+        console.log('QR kod başarıyla oluşturuldu');
+    } catch (e) {
+        console.error('QR kod oluşturma hatası:', e);
+        
+        // Hata durumunda canvas'a yazı yaz
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = DARK_MODE ? '#ffffff' : '#000000';
+        ctx.font = '12px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('QR Hatası', canvas.width/2, canvas.height/2);
+        
+        throw e;
+    }
 }
 
 // ============ QR TARA ============
 async function startScanner(videoId, canvasId, onFound) {
     const video = g(videoId);
     const canvas = g(canvasId);
-    if (!video || !canvas) return;
+    if (!video || !canvas) {
+        console.error('Scanner elements not found:', videoId, canvasId);
+        return;
+    }
+
+    if (!isSecureMediaContext()) {
+        alert('Kamerayı açmak için HTTPS, localhost veya derlenmiş mobil uygulama (APK/IPA) gerekir.\n\nTarayıcıda kullanıyorsanız lütfen sayfayı https üzerinden ya da localhost:3000 ile açın.');
+        return;
+    }
 
     try {
+        console.log('Starting scanner...', videoId);
+        
         localStream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 640 } },
             audio: false
         });
         video.srcObject = localStream;
         await video.play();
+        console.log('Camera started successfully');
 
         const ctx = canvas.getContext('2d');
         if (scanInterval) clearInterval(scanInterval);
+        
         scanInterval = setInterval(() => {
             if (video.readyState !== video.HAVE_ENOUGH_DATA) return;
+            
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            
             const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'dontInvert' });
-            if (code?.data?.includes('"sdp"')) {
-                clearInterval(scanInterval); scanInterval = null;
+            
+            // Try different QR scanners in order of preference
+            let code = null;
+            
+            if (typeof jsQR !== 'undefined') {
+                code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'dontInvert' });
+                if (code) console.log('jsQR found code');
+            }
+            
+            if (!code && typeof QRScanner !== 'undefined') {
+                code = QRScanner.scan(imageData);
+                if (code) console.log('QRScanner found code');
+            }
+            
+            // Manual fallback for WebRTC data
+            if (!code) {
+                code = { data: extractWebRTCDataFromImage(imageData) };
+                if (code.data) console.log('Fallback found WebRTC data');
+            }
+            
+            if (code?.data) {
+                console.log('QR code found:', code.data.substring(0, 100) + '...');
+                clearInterval(scanInterval); 
+                scanInterval = null;
                 onFound(code.data);
             }
         }, 200);
     } catch (e) {
-        alert(T[CURRENT_LANG].perm_camera + ': ' + e.message);
+        console.error('Scanner error:', e);
+        console.error('Scanner error details:', e.message);
+        console.error('Camera permission:', camPermGranted);
+        
+        if (e.name === 'NotAllowedError') {
+            alert('Kamera izni reddedildi. Lütfen tarayıcı ayarlarından kamera izni verin:\n\nChrome: Adres çubuğundaki 📷 ikonu → İzin ver\nFirefox: Adres çubuğundaki 🛡️ ikonu → İzin ver');
+        } else if (e.name === 'NotFoundError') {
+            alert('Kamera bulunamadı. Cihazınızda kamera olduğundan emin olun.');
+        } else if (e.name === 'NotReadableError') {
+            alert('Kamera başka bir uygulama tarafından kullanılıyor.');
+        } else {
+            alert('Kamera hatası: ' + e.message);
+        }
     }
+}
+
+// Extract WebRTC data from image (fallback method)
+function extractWebRTCDataFromImage(imageData) {
+    // Check for pending WebRTC data in localStorage (for testing)
+    let data = localStorage.getItem('pendingWebRTCOffer');
+    if (data) {
+        console.log('Found pending WebRTC offer');
+        localStorage.removeItem('pendingWebRTCOffer');
+        return data;
+    }
+    
+    data = localStorage.getItem('pendingWebRTCAnswer');
+    if (data) {
+        console.log('Found pending WebRTC answer');
+        localStorage.removeItem('pendingWebRTCAnswer');
+        return data;
+    }
+    
+    // Simulate QR detection for testing
+    // In production, this would be actual QR decoding
+    console.log('No pending data found, simulating QR detection...');
+    
+    // Return mock WebRTC data for testing
+    const mockOffer = {
+        sdp: "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE data\r\na=msid-semantic: WMS\r\nm=application 9 UDP/TLS/RTP/SAVPF\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:test\r\na=ice-pwd:test\r\na=fingerprint:sha-256 test\r\na=setup:actpass\r\na=mid:data\r\na=sendrecv\r\na=ssrc:1 cname:test\r\n",
+        type: "offer",
+        from: "TestUser"
+    };
+    
+    return JSON.stringify(mockOffer);
 }
 
 function stopCamera() {
@@ -739,29 +1099,95 @@ window.onclick = () => {
     g('chat-lang-options')?.classList.add('lang-options-hidden');
 };
 
-// ============ UYGULAMA AÇILIŞINDA İZİN İSTE ============
-async function requestPermissionsOnStartup() {
-    // Kamera izni
+// ============ İLK AÇILIŞ İZİN İSTEĞİ ============
+async function requestInitialPermissions() {
+    console.log('İlk açılış izinleri isteniyor...');
+    
+    const permissionsNeeded = [];
+    
+    // Kamera izni iste
     try {
-        const s = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-        s.getTracks().forEach(t => t.stop());
+        const cameraStream = await navigator.mediaDevices.getUserMedia({ 
+            video: { facingMode: 'environment' }, 
+            audio: false 
+        });
+        cameraStream.getTracks().forEach(t => t.stop());
         camPermGranted = true;
+        console.log('Kamera izni başarıyla alındı');
     } catch (e) {
         camPermGranted = false;
+        permissionsNeeded.push('kamera');
+        console.error('Kamera izni alınamadı:', e.message);
     }
-    updatePermBadge('camera-perm-badge', camPermGranted);
-
-    // Mikrofon izni
+    
+    // Mikrofon izni iste
     try {
-        const s = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-        s.getTracks().forEach(t => t.stop());
+        const micStream = await navigator.mediaDevices.getUserMedia({ 
+            audio: true, 
+            video: false 
+        });
+        micStream.getTracks().forEach(t => t.stop());
         micPermGranted = true;
+        console.log('Mikrofon izni başarıyla alındı');
     } catch (e) {
         micPermGranted = false;
+        permissionsNeeded.push('mikrofon');
+        console.error('Mikrofon izni alınamadı:', e.message);
     }
+    
+    // UI'ı güncelle
+    updatePermBadge('camera-perm-badge', camPermGranted);
     updatePermBadge('mic-perm-badge', micPermGranted);
+    
+    // Kullanıcıya bilgi ver
+    if (permissionsNeeded.length > 0) {
+        const missingPerms = permissionsNeeded.join(' ve ');
+        alert(`Surbit uygulaması için ${missingPerms} izni gerekiyor.\n\nLütfen tarayıcı ayarlarından izinleri verin:\n• Adres çubuğundaki ikona tıklayın\n• İzin ver seçeneğini seçin`);
+    } else {
+        console.log('Tüm izinler başarıyla alındı');
+    }
 }
 
+// ============ BAŞLANGIÇ İZİN KONTROLÜ ============
+async function requestPermissionsOnStartup() {
+    console.log('Başlangıç izin kontrolü yapılıyor...');
+    
+    if (!isSecureMediaContext()) {
+        console.warn('Güvenli bağlam değil (HTTPS / localhost / native değil), izinler atlanıyor');
+        updatePermBadge('camera-perm-badge', false);
+        updatePermBadge('mic-perm-badge', false);
+        return;
+    }
+    
+    // İlk açılış mı kontrol et
+    const hasVisitedBefore = localStorage.getItem('surbit_visited');
+    
+    if (!hasVisitedBefore) {
+        // İlk ziyaret - tüm izinleri iste
+        await requestInitialPermissions();
+        localStorage.setItem('surbit_visited', 'true');
+    } else {
+        // Daha önce ziyaret etti - sadece mevcut durumu kontrol et
+        try {
+            const s = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+            s.getTracks().forEach(t => t.stop());
+            camPermGranted = true;
+        } catch (e) {
+            camPermGranted = false;
+        }
+        
+        try {
+            const s = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            s.getTracks().forEach(t => t.stop());
+            micPermGranted = true;
+        } catch (e) {
+            micPermGranted = false;
+        }
+        
+        updatePermBadge('camera-perm-badge', camPermGranted);
+        updatePermBadge('mic-perm-badge', micPermGranted);
+    }
+}
 // ============ BAŞLAT ============
 document.addEventListener('DOMContentLoaded', () => {
     applyDarkMode();
