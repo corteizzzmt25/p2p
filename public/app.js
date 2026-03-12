@@ -339,12 +339,15 @@ function isSecureMediaContext() {
         const proto = location.protocol;
         const host = location.hostname;
         const isHttps = proto === 'https:';
+        const isCapacitor = proto === 'capacitor:' || proto === 'capacitor-native:';
+        const isFile = proto === 'file:';
         const isLocalhost = host === 'localhost' || host === '127.0.0.1';
         const isNative =
-            typeof Capacitor !== 'undefined' ||
+            (typeof Capacitor !== 'undefined') ||
+            (typeof window !== 'undefined' && window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.bridge) ||
             /Capacitor|Cordova/i.test((navigator.userAgent || '')) ||
             /Android|iPhone|iPad|iPod/i.test((navigator.userAgent || ''));
-        return isHttps || isLocalhost || isNative;
+        return isHttps || isLocalhost || isCapacitor || isFile || isNative;
     } catch (e) {
         return false;
     }
@@ -402,6 +405,34 @@ function updatePermBadge(id, granted) {
     badge.className = 'perm-badge ' + (granted ? 'green' : 'red');
     badge.innerText = granted ? t.perm_granted : t.perm_denied;
 }
+
+// ============ ÇIKIŞ ============
+window.logout = () => {
+    try { stopCamera(); } catch (e) {}
+    try { closePeer(); } catch (e) {}
+    MY_USERNAME = '';
+    CURRENT_CHAT_PEER = null;
+    CHAT_HISTORIES = {};
+    localStorage.removeItem('surbit_username');
+    localStorage.removeItem('surbit_visited');
+    const dmList = g('dm-list');
+    if (dmList) dmList.innerHTML = `
+        <div class="empty-state">
+            <div class="empty-icon">📡</div>
+            <div id="lang-no-conn">${T[CURRENT_LANG].no_conn}</div>
+            <div class="empty-hint" id="lang-no-conn-hint">${T[CURRENT_LANG].no_conn_hint}</div>
+        </div>
+    `;
+    updatePermBadge('camera-perm-badge', false);
+    updatePermBadge('mic-perm-badge', false);
+    const input = g('username-input');
+    if (input) {
+        input.value = '';
+        setTimeout(() => input.focus(), 200);
+    }
+    g('login-overlay').style.display = 'block';
+    showView('dm-view');
+};
 
 // ============ WebRTC ============
 const ICE = { 
