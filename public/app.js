@@ -353,6 +353,28 @@ function isSecureMediaContext() {
     }
 }
 
+function getUserMediaCompat(constraints) {
+    const nav = navigator;
+    if (nav?.mediaDevices?.getUserMedia) {
+        return nav.mediaDevices.getUserMedia(constraints);
+    }
+    const legacy =
+        nav?.getUserMedia ||
+        nav?.webkitGetUserMedia ||
+        nav?.mozGetUserMedia ||
+        nav?.msGetUserMedia;
+    if (legacy) {
+        return new Promise((resolve, reject) => {
+            try {
+                legacy.call(nav, constraints, resolve, reject);
+            } catch (e) {
+                reject(e);
+            }
+        });
+    }
+    return Promise.reject(new Error('getUserMedia desteklenmiyor (navigator.mediaDevices yok).'));
+}
+
 window.requestCameraPermission = async () => {
     try {
         if (!isSecureMediaContext()) {
@@ -361,7 +383,7 @@ window.requestCameraPermission = async () => {
             return;
         }
         
-        const stream = await navigator.mediaDevices.getUserMedia({ 
+        const stream = await getUserMediaCompat({ 
             video: { facingMode: 'environment' }, 
             audio: false 
         });
@@ -385,7 +407,7 @@ window.requestMicPermission = async () => {
             return;
         }
         
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        const stream = await getUserMediaCompat({ audio: true, video: false });
         stream.getTracks().forEach(t => t.stop());
         micPermGranted = true;
         updatePermBadge('mic-perm-badge', true);
@@ -835,7 +857,7 @@ async function startScanner(videoId, canvasId, onFound) {
     try {
         console.log('Starting scanner...', videoId);
         
-        localStream = await navigator.mediaDevices.getUserMedia({
+        localStream = await getUserMediaCompat({
             video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 640 } },
             audio: false
         });
@@ -1040,7 +1062,7 @@ g('mic-btn').onclick = async (e) => {
     if (mediaRecorder && mediaRecorder.state === 'recording') return;
 
     try {
-        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        micStream = await getUserMediaCompat({ audio: true });
         micPermGranted = true;
         audioChunks = [];
         mediaRecorder = new MediaRecorder(micStream);
@@ -1138,7 +1160,7 @@ async function requestInitialPermissions() {
     
     // Kamera izni iste
     try {
-        const cameraStream = await navigator.mediaDevices.getUserMedia({ 
+        const cameraStream = await getUserMediaCompat({ 
             video: { facingMode: 'environment' }, 
             audio: false 
         });
@@ -1153,7 +1175,7 @@ async function requestInitialPermissions() {
     
     // Mikrofon izni iste
     try {
-        const micStream = await navigator.mediaDevices.getUserMedia({ 
+        const micStream = await getUserMediaCompat({ 
             audio: true, 
             video: false 
         });
@@ -1200,7 +1222,7 @@ async function requestPermissionsOnStartup() {
     } else {
         // Daha önce ziyaret etti - sadece mevcut durumu kontrol et
         try {
-            const s = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+            const s = await getUserMediaCompat({ video: true, audio: false });
             s.getTracks().forEach(t => t.stop());
             camPermGranted = true;
         } catch (e) {
@@ -1208,7 +1230,7 @@ async function requestPermissionsOnStartup() {
         }
         
         try {
-            const s = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            const s = await getUserMediaCompat({ audio: true, video: false });
             s.getTracks().forEach(t => t.stop());
             micPermGranted = true;
         } catch (e) {
